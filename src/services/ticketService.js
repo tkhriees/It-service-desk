@@ -1,12 +1,117 @@
-import { initialTickets } from '../data/mockData.js';
-// Replace these methods with fetch calls to API_URL when your API is ready.
-export const API_URL = import.meta.env?.VITE_API_URL || '';
-const KEY = 'campusdesk-tickets-v1';
-function read() { const raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : structuredClone(initialTickets); }
-function save(tickets) { localStorage.setItem(KEY, JSON.stringify(tickets)); return tickets; }
+export const API_URL = import.meta.env.VITE_API_URL || '';
+
+function getToken() {
+  try {
+    const user = JSON.parse(sessionStorage.getItem('campusdesk-user'));
+    return user?.token;
+  } catch {
+    return null;
+  }
+}
+
+async function request(path, options = {}) {
+  if (!API_URL) {
+    throw new Error('Backend URL is not configured.');
+  }
+
+  const token = getToken();
+  if (!token) {
+    throw new Error('Please log in first.');
+  }
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...options.headers
+    }
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.message || 'Request failed.');
+  }
+
+  return data;
+}
+
+function formatTicket(ticket) {
+  return {
+    id: String(ticket.id),
+    title: ticket.title,
+    description: ticket.description || '',
+    status: ticket.status === 'In Progress'
+      ? 'In progress'
+      : ticket.status,
+    priority: ticket.priority || 'Medium',
+    category: ticket.category || 'Other',
+    createdAt: ticket.created_at,
+    studentId: ticket.created_by_user_id,
+    studentName: ticket.studentName || 'Student',
+    assignedTo: ticket.assignedTo || '',
+    attachments: [],
+    replies: [],
+    activity: []
+  };
+}
+
 export const ticketService = {
-  async list() { return read(); },
-  async create(fields) { const tickets = read(); const date = new Date().toISOString(); const ticket = { ...fields, id: `HD-${Math.max(1048,...tickets.map(t => Number(t.id.slice(3))))+1}`, createdAt: date, status: 'Open', assignedTo: '', replies: [], activity: [{ text: 'Ticket submitted', date }] }; save([ticket,...tickets]); return ticket; },
-  async update(id, changes, message) { const tickets = read(); const ticket = tickets.find(t => t.id === id); if (!ticket) throw new Error('Ticket could not be found.'); Object.assign(ticket,changes); if(message) ticket.activity.push({ text: message, date: new Date().toISOString() }); save(tickets); return ticket; },
-  async reply(id, body, author) { const tickets = read(); const ticket = tickets.find(t => t.id === id); if (!ticket) throw new Error('Ticket could not be found.'); ticket.replies.push({ id: crypto.randomUUID(), body, author, date: new Date().toISOString() }); ticket.activity.push({ text: `${author} added a reply`, date: new Date().toISOString() }); save(tickets); return ticket; }
+  async list() {
+    const data = await request('/api/tickets');
+    return (data.tickets || []).map(formatTicket);
+  },
+
+  async create(fields) {
+    const data = await request('/api/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: fields.title,
+        description: fields.description
+      })
+    });
+
+    return {
+      id: String(data.ticketId),
+      title: fields.title,
+      description: fields.description,
+      status: data.status || 'Open',
+      priority: data.priority || 'Medium',
+      category: 'Other',
+      createdAt: new Date().toISOString(),
+      studentId: fields.studentId,
+      studentName: fields.studentName,
+      assignedTo: '',
+      attachments: [],
+      replies: [],
+      activity: []
+    };
+  },
+
+  async update(id, changes) {
+    if (changes.status !== undefined) {
+      const status = changes.status === 'In progress'
+        ? 'In Progress'
+        : changes.status;
+
+      return request(`/api/tickets/${encodeURIComponent(id)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status })
+      });
+    }
+
+    throw new Error('This update is not supported by the backend yet.');
+  },
+
+  async assign(id, userId) {
+    return request(`/api/tickets/${encodeURIComponent(id)}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ userId })
+    });
+  },
+
+  async reply() {
+    throw new Error('Ticket replies are not supported by the backend yet.');
+  }
 };
